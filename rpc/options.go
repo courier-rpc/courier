@@ -85,3 +85,18 @@ func WithClientInterceptors(is ...Interceptor) ClientOption {
 		c.interceptors = append(c.interceptors, is...)
 	}
 }
+
+// WithServerDeviceID adds a direct subscription for this stable device ID.
+// Use a unique ID per service instance; omitting it preserves shared-only routing.
+func WithServerDeviceID(id string) ServerOption {
+	return func(s *Server) { s.deviceID = id }
+}
+
+// CallOption configures routing for an individual call.
+type CallOption func(*callOptions)
+type callOptions struct{ targetDeviceID *string }
+
+// WithTargetDevice directs a call to one device, with no shared-group fallback.
+func WithTargetDevice(id string) CallOption {
+	return func(o *callOptions) { o.targetDeviceID = &id }
+}

@@ -204,3 +204,7 @@ srv.Register(courier.ServiceInfo{
 ## License
 
 [MIT](LICENSE)
+
+### 精确调用设备
+
+服务端使用 `rpc.WithServerDeviceID("device-001")` 开启设备入口；调用时追加 `rpc.WithTargetDevice("device-001")`，即可直达该设备。不传调用选项继续使用原有共享分发。详见 [共享订阅与设备路由](doc/shared-subscription.md#按设备-id-精确调用)。

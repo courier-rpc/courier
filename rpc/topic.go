@@ -1,6 +1,10 @@
 package rpc
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
 
 const (
 	// topicPrefix is the root prefix for all courier MQTT topics.
@@ -32,4 +36,17 @@ func ResponseTopic(deviceID string) string {
 // Example: "mrpc/event/UserService/UserOnline"
 func EventTopic(serviceName, eventName string) string {
 	return fmt.Sprintf("%s/event/%s/%s", topicPrefix, serviceName, eventName)
+}
+
+// DirectRequestTopic returns the non-shared request topic for one device.
+// Device IDs must be unique among instances of the same service.
+func DirectRequestTopic(serviceName, deviceID string) string {
+	return fmt.Sprintf("%s/request/%s/device/%s", topicPrefix, serviceName, deviceID)
+}
+
+func validateDeviceID(id string) error {
+	if id == "" || !utf8.ValidString(id) || strings.ContainsAny(id, "/+#\x00") {
+		return fmt.Errorf("courier/rpc: device ID must be a non-empty MQTT topic segment without /, +, # or NUL")
+	}
+	return nil
 }

@@ -13,6 +13,7 @@ import (
 type Server struct {
 	tp              transport.Transport
 	serviceName     string
+	deviceID        string
 	sharedSubscribe bool
 	interceptors    []Interceptor
 
@@ -55,19 +56,31 @@ func (s *Server) Start() error {
 		return fmt.Errorf("courier/rpc: server has no service name")
 	}
 
+	if s.deviceID != "" {
+		if err := validateDeviceID(s.deviceID); err != nil {
+			return err
+		}
+	}
+
 	// Connect transport first.
 	if err := s.tp.Connect(); err != nil {
 		return fmt.Errorf("courier/rpc: transport connect failed: %w", err)
 	}
 
-	topic := s.requestTopic()
-	respHandler := s.makeMessageHandler()
-
-	if err := s.tp.Subscribe(topic, respHandler); err != nil {
-		return fmt.Errorf("courier/rpc: subscribe to %s failed: %w", topic, err)
+	handler := s.makeMessageHandler()
+	subscribed := []string{}
+	for _, topic := range s.requestTopics() {
+		if err := s.tp.Subscribe(topic, handler); err != nil {
+			// Also remove the failed subscription: transports may store it before returning an error.
+			_ = s.tp.Unsubscribe(topic)
+			for _, previous := range subscribed {
+				_ = s.tp.Unsubscribe(previous)
+			}
+			return fmt.Errorf("courier/rpc: subscribe to %s failed: %w", topic, err)
+		}
+		subscribed = append(subscribed, topic)
+		log.Printf("[courier/rpc] server subscribed to %s", topic)
 	}
-
-	log.Printf("[courier/rpc] server subscribed to %s", topic)
 	return nil
 }
 
@@ -76,8 +89,9 @@ func (s *Server) Stop() error {
 	if s.tp == nil {
 		return nil
 	}
-	topic := s.requestTopic()
-	_ = s.tp.Unsubscribe(topic)
+	for _, topic := range s.requestTopics() {
+		_ = s.tp.Unsubscribe(topic)
+	}
 	return s.tp.Close()
 }
 
@@ -133,4 +147,12 @@ func errorCode(err error) uint32 {
 		return uint32(rpcErr.Code)
 	}
 	return 2
+}
+
+func (s *Server) requestTopics() []string {
+	topics := []string{s.requestTopic()}
+	if s.deviceID != "" {
+		topics = append(topics, DirectRequestTopic(s.serviceName, s.deviceID))
+	}
+	return topics
 }

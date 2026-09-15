@@ -93,7 +93,18 @@ func (c *Client) Close() error {
 }
 
 // Call sends an RPC request and waits for the response or timeout.
-func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, payload []byte) ([]byte, error) {
+func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, payload []byte, opts ...CallOption) ([]byte, error) {
+	var options callOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	reqTopic := RequestTopic(serviceName)
+	if options.targetDeviceID != nil {
+		if err := validateDeviceID(*options.targetDeviceID); err != nil {
+			return nil, err
+		}
+		reqTopic = DirectRequestTopic(serviceName, *options.targetDeviceID)
+	}
 	requestID, err := newRequestID()
 	if err != nil {
 		return nil, fmt.Errorf("courier/rpc: generate request ID: %w", err)
@@ -129,7 +140,6 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 
 	// ClientID is NOT in the frame — the broker injects it via message properties.
 	reqBytes := codec.EncodeRequest(cmd, requestID, nil, payload)
-	reqTopic := RequestTopic(serviceName)
 
 	if pubErr := c.tp.Publish(reqTopic, reqBytes); pubErr != nil {
 		c.mu.Lock()

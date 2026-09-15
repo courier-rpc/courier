@@ -71,9 +71,8 @@ func (t *MQTTTransport) Connect() error {
 
 	clientID := t.clientID
 	if clientID == "" {
-		clientID = "courier"
+		clientID = fmt.Sprintf("courier_%d_%04x", time.Now().Unix(), rand.Intn(0xFFFF))
 	}
-	clientID = fmt.Sprintf("%s_%d_%04x", clientID, time.Now().Unix(), rand.Intn(0xFFFF))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelFunc = cancel
