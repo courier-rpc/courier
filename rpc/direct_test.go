@@ -1,12 +1,14 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/simpossible/courier/codec"
 	"github.com/simpossible/courier/transport"
 )
 
@@ -139,5 +141,36 @@ func TestRequestTopicsCompatibility(t *testing.T) {
 		if got := s.requestTopics(); len(got) != 2 || got[0] != expected || got[1] != DirectRequestTopic("Status", "a") {
 			t.Fatal(got)
 		}
+	}
+}
+
+func TestCompressedCalls(t *testing.T) {
+	var peers []*routingTransport
+	tp := newRoutingTransport(&peers, "device")
+	server := NewServer(WithServerTransport(tp), WithServiceName("Echo"), WithServerDeviceID("device"))
+	server.Register(ServiceInfo{ServiceName: "Echo", Methods: []MethodInfo{{Cmd: 1, Handle: func(_ *Context, payload []byte) ([]byte, error) { return payload, nil }}}})
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+	ct := newRoutingTransport(&peers, "caller")
+	client := NewClient(WithClientTransport(ct), WithClientID("caller"), WithCompression(codec.CompressionGZIP))
+	if err := client.Connect(); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	for _, algorithm := range []codec.Compression{codec.CompressionGZIP, codec.CompressionNone} {
+		for _, payload := range [][]byte{nil, []byte(strings.Repeat("device status ", 1000))} {
+			result, err := client.Call(context.Background(), "Echo", 1, payload, WithTargetDevice("device"), WithCallCompression(algorithm))
+			if err != nil || !bytes.Equal(result, payload) {
+				t.Fatalf("call failed: %v", err)
+			}
+		}
+	}
+	if _, err := client.Call(context.Background(), "Echo", 1, nil, WithCallCompression(99)); err == nil {
+		t.Fatal("accepted unknown algorithm")
+	}
+	if len(client.pending) != 0 {
+		t.Fatal("pending call leaked")
 	}
 }

@@ -3,6 +3,7 @@ package rpc
 import (
 	"time"
 
+	"github.com/simpossible/courier/codec"
 	"github.com/simpossible/courier/transport"
 )
 
@@ -94,9 +95,23 @@ func WithServerDeviceID(id string) ServerOption {
 
 // CallOption configures routing for an individual call.
 type CallOption func(*callOptions)
-type callOptions struct{ targetDeviceID *string }
+type callOptions struct {
+	targetDeviceID *string
+	compression    *codec.Compression
+}
 
 // WithTargetDevice directs a call to one device, with no shared-group fallback.
 func WithTargetDevice(id string) CallOption {
 	return func(o *callOptions) { o.targetDeviceID = &id }
+}
+
+// WithCompression selects v2 framing and payload compression for all client calls.
+// Omit it to keep v1 framing. CompressionNone selects uncompressed v2 frames.
+func WithCompression(algorithm codec.Compression) ClientOption {
+	return func(c *Client) { c.compression = &algorithm }
+}
+
+// WithCallCompression overrides the client's compression for one call.
+func WithCallCompression(algorithm codec.Compression) CallOption {
+	return func(o *callOptions) { o.compression = &algorithm }
 }

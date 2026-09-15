@@ -132,7 +132,16 @@ func (s *Server) makeMessageHandler() transport.MessageHandler {
 			respBytes = respPayload
 		}
 
-		respFrame := codec.EncodeResponse(ctx.RequestID, respCode, respBytes)
+		var respFrame []byte
+		if frame.Version == codec.CompressionProtocolVersion {
+			respFrame, err = codec.EncodeResponseWithCompression(ctx.RequestID, respCode, respBytes, frame.Compression)
+			if err != nil {
+				// Return a bounded, uncompressed v2 error rather than timing out on oversized output.
+				respFrame, _ = codec.EncodeResponseWithCompression(ctx.RequestID, 2, []byte(err.Error()), codec.CompressionNone)
+			}
+		} else {
+			respFrame = codec.EncodeResponse(ctx.RequestID, respCode, respBytes)
+		}
 		respTopic := ResponseTopic(ctx.ClientID)
 
 		if pubErr := s.tp.Publish(respTopic, respFrame); pubErr != nil {

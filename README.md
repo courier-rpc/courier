@@ -208,3 +208,11 @@ srv.Register(courier.ServiceInfo{
 ### 精确调用设备
 
 服务端使用 `rpc.WithServerDeviceID("device-001")` 开启设备入口；调用时追加 `rpc.WithTargetDevice("device-001")`，即可直达该设备。不传调用选项继续使用原有共享分发。详见 [共享订阅与设备路由](doc/shared-subscription.md#按设备-id-精确调用)。
+
+### GZIP 压缩
+
+客户端配置 `rpc.WithCompression(codec.CompressionGZIP)`，或调用时追加 `rpc.WithCallCompression(codec.CompressionGZIP)`，即可对请求和响应 payload 启用 GZIP。v2 header 携带算法类型（0=None、1=GZIP），接收端自动解压。默认仍发送 v1，启用前需升级服务端。详见 [压缩协议与用法](doc/compression.md)。
+
+### 本地 MQTT 联调
+
+运行 `./scripts/test-integration.sh`，自动启动临时 MQTT 5 broker 和两个服务实例，依次运行 Go、JS、Dart、Swift 的真实网络测试，并在成功、失败或中断后关闭服务。无需 Docker；依赖已安装可加 `--skip-install`。环境要求及单端入口见 [联调说明](integration/README.md)。

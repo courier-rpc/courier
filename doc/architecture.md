@@ -24,6 +24,8 @@ Courier 分为三层，每层职责单一、可独立替换：
 
 ## 二进制协议
 
+以下为默认 v1 格式；带压缩算法字段的 v2 格式见 [GZIP 压缩](compression.md)。
+
 ### Request Frame
 
 ```
@@ -48,7 +50,7 @@ Courier 分为三层，每层职责单一、可独立替换：
 ```
 
 - **Length** (uint32, BigEndian): 整帧长度 = 28 + len(Extensions) + len(Payload)
-- **Version** (uint16, BigEndian): 协议版本，当前为 1
+- **Version** (uint16, BigEndian): 协议版本，默认 1，启用压缩选项时为 2
 - **Cmd** (uint32, BigEndian): 命令号，用于路由到对应的处理函数
 - **RequestID** (16B): 来自请求的唯一标识，用于匹配请求和响应
 - **ExtensionsLen** (uint16, BigEndian): 扩展段字节数，0 表示无扩展

@@ -6,8 +6,9 @@ import "encoding/binary"
 type RequestFrame struct {
 	Length        uint32
 	Version       uint16
+	Compression   Compression
 	Cmd           uint32
-	RequestID    [16]byte
+	RequestID     [16]byte
 	ExtensionsLen uint16
 	Extensions    []byte
 	Payload       []byte
@@ -52,20 +53,52 @@ func DecodeRequest(data []byte) (*RequestFrame, error) {
 	}
 	copy(frame.RequestID[:], data[10:26])
 
-	if frame.ExtensionsLen > 0 {
-		extEnd := ExtensionsDataOffset + int(frame.ExtensionsLen)
-		if extEnd > int(length) {
+	headerLen := RequestHeaderLen
+	switch frame.Version {
+	case ProtocolVersion:
+	case CompressionProtocolVersion:
+		headerLen = RequestHeaderLenV2
+		if length < uint32(headerLen) {
 			return nil, ErrInvalidLength
 		}
-		frame.Extensions = make([]byte, frame.ExtensionsLen)
-		copy(frame.Extensions, data[ExtensionsDataOffset:extEnd])
+		frame.Compression = Compression(data[RequestHeaderLen])
+	default:
+		return nil, ErrUnsupportedVersion
 	}
-
-	payloadOffset := ExtensionsDataOffset + int(frame.ExtensionsLen)
-	if uint32(payloadOffset) < length {
-		frame.Payload = make([]byte, length-uint32(payloadOffset))
-		copy(frame.Payload, data[payloadOffset:length])
+	payloadOffset := headerLen + int(frame.ExtensionsLen)
+	if payloadOffset > int(length) {
+		return nil, ErrInvalidLength
 	}
-
+	frame.Extensions = append([]byte(nil), data[headerLen:payloadOffset]...)
+	frame.Payload = append([]byte(nil), data[payloadOffset:length]...)
+	if frame.Version == CompressionProtocolVersion {
+		var err error
+		frame.Payload, err = decompressPayload(frame.Payload, frame.Compression)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return frame, nil
+}
+
+// EncodeRequestWithCompression writes a v2 request. Only payload is compressed;
+// extensions and all routing fields remain uncompressed.
+func EncodeRequestWithCompression(cmd uint32, requestID [16]byte, extensions, payload []byte, algorithm Compression) ([]byte, error) {
+	if len(extensions) > 65535 {
+		return nil, ErrInvalidLength
+	}
+	body, err := compressPayload(payload, algorithm)
+	if err != nil {
+		return nil, err
+	}
+	b := make([]byte, RequestHeaderLenV2+len(extensions)+len(body))
+	binary.BigEndian.PutUint32(b[:4], uint32(len(b)))
+	binary.BigEndian.PutUint16(b[4:6], CompressionProtocolVersion)
+	binary.BigEndian.PutUint32(b[6:10], cmd)
+	copy(b[10:26], requestID[:])
+	binary.BigEndian.PutUint16(b[26:28], uint16(len(extensions)))
+	b[28] = byte(algorithm)
+	copy(b[29:], extensions)
+	copy(b[29+len(extensions):], body)
+	return b, nil
 }

@@ -12,8 +12,14 @@ import (
 	"github.com/simpossible/courier/transport"
 )
 
+type callResult struct {
+	payload []byte
+	err     error
+}
+
 type pendingCall struct {
-	respChan chan []byte
+	respChan chan callResult
+	version  uint16
 	timer    *time.Timer
 }
 
@@ -21,6 +27,7 @@ type pendingCall struct {
 type Client struct {
 	tp            transport.Transport
 	clientID      string
+	compression   *codec.Compression
 	timeout       time.Duration
 	retryCount    int
 	retryInterval time.Duration
@@ -82,7 +89,7 @@ func (c *Client) Close() error {
 	for id, call := range c.pending {
 		call.timer.Stop()
 		select {
-		case call.respChan <- nil:
+		case call.respChan <- callResult{err: ErrTimeout}:
 		default:
 		}
 		delete(c.pending, id)
@@ -94,7 +101,7 @@ func (c *Client) Close() error {
 
 // Call sends an RPC request and waits for the response or timeout.
 func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, payload []byte, opts ...CallOption) ([]byte, error) {
-	var options callOptions
+	options := callOptions{compression: c.compression}
 	for _, opt := range opts {
 		opt(&options)
 	}
@@ -110,13 +117,22 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 		return nil, fmt.Errorf("courier/rpc: generate request ID: %w", err)
 	}
 
-	call := &pendingCall{
-		respChan: make(chan []byte, 1),
+	// Encode before registering the call so invalid compression cannot leak pending calls.
+	version := codec.ProtocolVersion
+	var reqBytes []byte
+	if options.compression != nil {
+		version = codec.CompressionProtocolVersion
+		reqBytes, err = codec.EncodeRequestWithCompression(cmd, requestID, nil, payload, *options.compression)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		reqBytes = codec.EncodeRequest(cmd, requestID, nil, payload)
 	}
-
-	c.mu.Lock()
-	c.pending[requestID] = call
-	c.mu.Unlock()
+	call := &pendingCall{
+		version:  version,
+		respChan: make(chan callResult, 1),
+	}
 
 	defer func() {
 		c.mu.Lock()
@@ -127,19 +143,20 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 		c.mu.Unlock()
 	}()
 
+	c.mu.Lock()
 	call.timer = time.AfterFunc(c.timeout, func() {
 		c.mu.Lock()
 		delete(c.pending, requestID)
 		c.mu.Unlock()
 
 		select {
-		case call.respChan <- nil:
+		case call.respChan <- callResult{err: ErrTimeout}:
 		default:
 		}
 	})
 
-	// ClientID is NOT in the frame — the broker injects it via message properties.
-	reqBytes := codec.EncodeRequest(cmd, requestID, nil, payload)
+	c.pending[requestID] = call
+	c.mu.Unlock()
 
 	if pubErr := c.tp.Publish(reqTopic, reqBytes); pubErr != nil {
 		c.mu.Lock()
@@ -171,15 +188,24 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 	}
 }
 
-func (c *Client) handleCallResult(resp []byte) ([]byte, error) {
-	if resp == nil {
-		return nil, ErrTimeout
-	}
-	return resp, nil
+func (c *Client) handleCallResult(resp callResult) ([]byte, error) {
+	return resp.payload, resp.err
 }
 
 func (c *Client) handleResponse(topic string, payload []byte, props transport.MessageProperties) {
-	frame, err := codec.DecodeResponse(payload)
+	// The request ID has the same offset in v1 and v2 responses.
+	if len(payload) < 20 {
+		return
+	}
+	var requestID [16]byte
+	copy(requestID[:], payload[4:20])
+	c.mu.RLock()
+	pending := c.pending[requestID]
+	c.mu.RUnlock()
+	if pending == nil {
+		return
+	}
+	frame, err := codec.DecodeResponseWithVersion(payload, pending.version)
 	if err != nil {
 		log.Printf("[courier/rpc] failed to decode response: %v", err)
 		return
@@ -197,11 +223,9 @@ func (c *Client) handleResponse(topic string, payload []byte, props transport.Me
 		return
 	}
 
-	var result []byte
+	result := callResult{payload: frame.Payload}
 	if frame.Code != codec.ResponseCodeOK {
-		result = nil
-	} else {
-		result = frame.Payload
+		result = callResult{err: NewError(int32(frame.Code), string(frame.Payload))}
 	}
 
 	select {
